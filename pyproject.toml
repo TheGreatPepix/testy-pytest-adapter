@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "testy-pytest-adapter"
+version = "1.0.0"
+description = "Pytest plugin for sync Tests with TestY TMS"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Igor Safronov" }]
+keywords = ["pytest", "testy", "tms", "test-management", "allure", "reporting"]
+dependencies = [
+    "pytest>=7",
+    "requests>=2.28",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.optional-dependencies]
+dev = ["responses>=0.25", "pytest-cov"]
+
+[project.urls]
+Homepage = "https://github.com/TheGreatPepix/testy-pytest-adapter"
+Repository = "https://github.com/TheGreatPepix/testy-pytest-adapter"
+
+[project.entry-points.pytest11]
+testy = "testy_pytest.plugin"
+
+[tool.setuptools.packages.find]
+include = ["testy_pytest*"]
+
+[tool.setuptools]
+py-modules = ["testy"]
