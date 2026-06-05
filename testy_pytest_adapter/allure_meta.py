@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-_SUITE_ORDER = {"parentSuite": 0, "suite": 1, "subSuite": 2}
+_TREE_ORDER = {
+    "epic": 0, "feature": 1, "story": 2,
+    "parentSuite": 3, "suite": 4, "subSuite": 5,
+}
 
 
 def suite_path(item) -> list[str]:
     found: dict[int, str] = {}
     for marker in item.iter_markers(name="allure_label"):
         label_type = marker.kwargs.get("label_type")
-        if label_type in _SUITE_ORDER and marker.args:
-            found[_SUITE_ORDER[label_type]] = str(marker.args[0]).strip()
+        if label_type in _TREE_ORDER and marker.args:
+            found[_TREE_ORDER[label_type]] = str(marker.args[0]).strip()
     return [found[key] for key in sorted(found) if found[key]]
 
 
