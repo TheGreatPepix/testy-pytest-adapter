@@ -22,6 +22,7 @@ class TestyConfig:
     plan_name: str = ""
     override_cases: bool = True
     attach_mode: str = "failure"
+    attach_bytes: bool = True
     ci_pipeline_url: str = ""
     ci_job_url: str = ""
     pytest_targets: list[str] = field(default_factory=list)
@@ -118,6 +119,7 @@ class TestyConfig:
             override_cases=bool_opt(None, "TESTY_OVERRIDE_CASES", "testy_override_cases",
                                     default=True),
             attach_mode=str(opt(None, "TESTY_ATTACH", "testy_attach", "failure")).lower(),
+            attach_bytes=bool_opt(None, "TESTY_ATTACH_BYTES", "testy_attach_bytes", default=True),
             ci_pipeline_url=os.environ.get("CI_PIPELINE_URL", ""),
             ci_job_url=os.environ.get("CI_JOB_URL", ""),
             pytest_targets=_targets_from_env(os.environ.get("TESTY_PYTEST_TARGETS")),

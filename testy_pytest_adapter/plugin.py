@@ -51,6 +51,9 @@ def pytest_addoption(parser):
                   type="bool", default=False)
     parser.addini("testy_attach", "Attachment upload mode: failure, always, never.",
                   default="failure")
+    parser.addini("testy_attach_bytes",
+                  "Capture in-memory allure.attach(bytes/str) payloads (e.g. screenshots).",
+                  type="bool", default=True)
     parser.addini("testy_auth_scheme", "Authorization scheme: Token or Bearer.",
                   default="Token")
     parser.addini("testy_insecure", "Disable TLS certificate verification.",
@@ -72,6 +75,7 @@ def pytest_configure(config):
     config._testy = _TestyState(cfg) if cfg else None
     if config._testy is not None:
         step_capture.install()
+        attachments.install(cfg.attach_bytes)
 
 
 def pytest_runtest_setup(item):
@@ -89,6 +93,15 @@ def pytest_runtest_makereport(item, call):
     report = outcome.get_result()
     if report.when == "call" or (report.when == "setup" and (report.failed or report.skipped)):
         state.record(item, report)
+
+
+def pytest_runtest_teardown(item):
+    state: "_TestyState | None" = getattr(item.config, "_testy", None)
+    if state is None:
+        return
+    leftover = attachments.pop(item.nodeid)
+    if leftover:
+        state.add_attachments(item, leftover)
 
 
 def pytest_collection_finish(session):
@@ -172,6 +185,12 @@ class _TestyState:
             comment=comment, execution_time=duration, nodeid=item.nodeid,
             attachments=files, steps=steps, variants=list(variants),
         ))
+
+    def add_attachments(self, item, files: list[str]) -> None:
+        key = f"ext:{external_id(item.nodeid, strip_params=self.cfg.strip_params)}"
+        res = self.results.get(key)
+        if res is not None:
+            res.attachments = list(res.attachments) + list(files)
 
     def sync(self, items) -> None:
         auto: dict[str, tuple[list, list, str]] = {}

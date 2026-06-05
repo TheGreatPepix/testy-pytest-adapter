@@ -120,6 +120,22 @@ def _compose_comment(result: CaseResult, limit: int = 5000) -> str:
     return "\n\n".join(parts)
 
 
+def _inline_url(link: str) -> str:
+    if not link:
+        return link
+    separator = "&" if "?" in link else "?"
+    return f"{link}{separator}view=true"
+
+
+def _comment_with_images(comment: str, images: list[dict]) -> str:
+    if not images:
+        return comment
+    gallery = "\n\n".join(
+        f"![{image['name']}]({_inline_url(image['link'])})" for image in images
+    )
+    return f"{comment}\n\n{gallery}" if comment else gallery
+
+
 class TestyClient:
     __test__ = False  # not a pytest test class despite the Test* name
 
@@ -455,8 +471,11 @@ class TestyClient:
             attributes["ci_job_url"] = self.cfg.ci_job_url
 
         attachment_ids: list[int] = []
+        image_attachments: list[dict] = []
         if result.attachments and self.cfg.should_attach(result.outcome):
-            attachment_ids = self._upload_attachments(result.attachments)
+            uploaded = self._upload_attachments(result.attachments)
+            attachment_ids = [item["id"] for item in uploaded]
+            image_attachments = [item for item in uploaded if item["is_image"] and item["link"]]
 
         steps_results: list[dict] = []
         if result.steps:
@@ -475,7 +494,7 @@ class TestyClient:
             "test": test_id,
             "status": status_id,
             "project": self.cfg.project_id,
-            "comment": _compose_comment(result),
+            "comment": _comment_with_images(_compose_comment(result), image_attachments),
             "execution_time": result.execution_time,
             "attributes": attributes,
         }
@@ -533,8 +552,8 @@ class TestyClient:
             return []
         return _ordered_steps(updated_case.get("steps") or [])
 
-    def _upload_attachments(self, paths: list[str]) -> list[int]:
-        ids: list[int] = []
+    def _upload_attachments(self, paths: list[str]) -> list[dict]:
+        uploaded: list[dict] = []
         for path in paths:
             if not os.path.isfile(path):
                 log.warning("TestY: attachment not found, skipping: %s", path)
@@ -554,5 +573,10 @@ class TestyClient:
                 continue
             body = resp.json()
             obj = body[0] if isinstance(body, list) else body
-            ids.append(int(obj["id"]))
-        return ids
+            uploaded.append({
+                "id": int(obj["id"]),
+                "link": str(obj.get("link") or ""),
+                "is_image": content_type.startswith("image/"),
+                "name": os.path.splitext(os.path.basename(path))[0],
+            })
+        return uploaded

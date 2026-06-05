@@ -121,6 +121,7 @@ TESTY_TOKEN=... pytest --testy --testy-root-name=Autotests
 | -                   | `TESTY_KEEP_PARAMS`                       | `testy_keep_params`    | не срезать `[param]`, каждая параметризация будет отдельным кейсом |
 | -                   | `TESTY_OVERRIDE_CASES`                    | `testy_override_cases` | перезаписывать шаги существующего кейса, по умолчанию `true`       |
 | -                   | `TESTY_ATTACH`                            | `testy_attach`         | когда загружать вложения: `failure`, `always`, `never`             |
+| -                   | `TESTY_ATTACH_BYTES`                      | `testy_attach_bytes`   | захватывать `allure.attach` из памяти (скриншоты), по умолчанию `true` |
 | -                   | `TESTY_AUTH_SCHEME`                       | `testy_auth_scheme`    | схема авторизации: `Token` или `Bearer`                            |
 | -                   | `TESTY_INSECURE`                          | `testy_insecure`       | отключить проверку TLS-сертификата                                 |
 | -                   | `TESTY_STATUS_PASSED` и остальные статусы | `testy_status_*`       | реальные имена статусов проекта                                    |
@@ -199,6 +200,10 @@ Sync идемпотентный: повторный запуск находит 
 
 ## Доказательства падений: вложения и ссылки
 
+Вложения к результату можно добавить двумя способами.
+
+**Через `testy.attach`** — явно указать локальный файл:
+
 ```python
 import testy
 
@@ -208,6 +213,22 @@ def test_login(page):
     ...
 ```
 
+**Через Allure** — если установлен `allure-pytest`, адаптер сам подхватывает любые
+`allure.attach(...)` и `allure.attach.file(...)` и грузит их к результату. Отдельно
+вызывать `testy.attach` не нужно — в том числе если скриншот прикрепляется из хука
+`pytest_runtest_makereport` (автоскриншот на падении):
+
+```python
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item):
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call" and not report.passed:
+        allure.attach(page.screenshot(), attachment_type=allure.attachment_type.PNG)
+```
+
+Картинки (`image/*`) дополнительно встраиваются прямо в текст комментария результата.
+
 Когда загружать вложения, задаётся через `TESTY_ATTACH`:
 
 ```text
@@ -215,6 +236,12 @@ failure / always / never
 ```
 
 По умолчанию используется `failure`, то есть вложения отправляются только на падениях.
+
+Захват `allure.attach()` можно отключить, оставив только файловые вложения:
+
+```text
+TESTY_ATTACH_BYTES=false   # или testy_attach_bytes = false в pytest.ini
+```
 
 Также адаптер сохраняет в атрибутах результата ссылки из GitLab CI:
 
