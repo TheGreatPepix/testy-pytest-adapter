@@ -58,6 +58,8 @@ def pytest_addoption(parser):
                   default="Token")
     parser.addini("testy_insecure", "Disable TLS certificate verification.",
                   type="bool", default=False)
+    parser.addini("testy_workers", "Thread-pool size for parallel result reporting (default 8).",
+                  default="8")
     parser.addini("testy_status_passed", "Project status name for passed tests.")
     parser.addini("testy_status_failed", "Project status name for failed tests.")
     parser.addini("testy_status_skipped", "Project status name for skipped tests.")
@@ -244,14 +246,10 @@ class _TestyState:
         except Exception as exc:  # noqa: BLE001 — reporting must never crash CI
             log.error("TestY: could not initialise client: %s", exc)
             return
-        ok = 0
-        for result in self.results.values():
-            try:
-                ok += bool(client.report(result))
-            except Exception as exc:  # noqa: BLE001
-                log.error("TestY: error reporting %s: %s", result.nodeid, exc)
+        results = list(self.results.values())
+        ok = client.report_all(results, max_workers=self.cfg.workers)
         log.info("TestY: reported %s/%s results to plan %s",
-                 ok, len(self.results), self.cfg.plan_id)
+                 ok, len(results), self.cfg.plan_id)
 
 
 _SEVERITY = {"passed": 0, "xfailed": 0, "skipped": 1, "xpassed": 3, "error": 4, "failed": 4}
