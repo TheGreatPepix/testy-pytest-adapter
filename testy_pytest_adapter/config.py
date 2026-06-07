@@ -30,6 +30,7 @@ class TestyConfig:
     auth_scheme: str = "Token"
     verify_ssl: bool = True
     timeout: int = 30
+    workers: int = 8
 
     @property
     def api(self) -> str:
@@ -124,6 +125,7 @@ class TestyConfig:
             ci_job_url=os.environ.get("CI_JOB_URL", ""),
             pytest_targets=_targets_from_env(os.environ.get("TESTY_PYTEST_TARGETS")),
             verify_ssl=not bool_opt(None, "TESTY_INSECURE", "testy_insecure"),
+            workers=int(os.environ.get("TESTY_WORKERS") or ini("testy_workers") or 8),
         )
 
     def should_attach(self, outcome: str) -> bool:

@@ -5,6 +5,8 @@ import logging
 import mimetypes
 import os
 import datetime as dt
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -513,6 +515,45 @@ class TestyClient:
                       result.nodeid, resp.status_code, resp.text[:500])
             return False
         return True
+
+    def _clone_for_thread(self) -> "TestyClient":
+        clone = object.__new__(TestyClient)
+        clone.cfg = self.cfg
+        clone.session = requests.Session()
+        clone.session.headers["Authorization"] = f"{self.cfg.auth_scheme} {self.cfg.token}"
+        clone._status_ids = self._status_ids
+        clone._test_by_case = self._test_by_case
+        clone._case_by_external = dict(self._case_by_external)
+        clone._suite_cache = self._suite_cache
+        clone._suite_attrs_cache = self._suite_attrs_cache
+        clone._plan_cache = self._plan_cache
+        return clone
+
+    def report_all(self, results: list[CaseResult], max_workers: int = 8) -> int:
+        for result in results:
+            if result.external_id:
+                self.resolve_case_by_external_id(result.external_id)
+
+        _local: threading.local = threading.local()
+
+        def _get_worker() -> "TestyClient":
+            if not hasattr(_local, "client"):
+                _local.client = self._clone_for_thread()
+            return _local.client
+
+        def _report_one(result: CaseResult) -> bool:
+            return _get_worker().report(result)
+
+        ok = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_report_one, r): r for r in results}
+            for future in as_completed(futures):
+                r = futures[future]
+                try:
+                    ok += bool(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    log.error("TestY: error reporting %s: %s", r.nodeid, exc)
+        return ok
 
     def _sync_case_steps(self, case_id: int, steps_tree: list) -> list[dict]:
         try:

@@ -107,24 +107,25 @@ TESTY_TOKEN=... pytest --testy --testy-root-name=Autotests
 
 ## Основные опции
 
-| CLI                 | Переменная окружения                      | pytest.ini             | Назначение                                                         |
-| ------------------- | ----------------------------------------- | ---------------------- |--------------------------------------------------------------------|
-| `--testy`           | `TESTY_ENABLED`                           | `testy_enabled`        | включить отправку в TestY                                          |
-| `--testy-url`       | `TESTY_URL`                               | `testy_url`            | базовый адрес TestY                                                |
-| `--testy-token`     | `TESTY_TOKEN`                             | -                      | токен доступа                                                      |
-| `--testy-project`   | `TESTY_PROJECT_ID`                        | `testy_project_id`     | id проекта                                                         |
-| `--testy-plan`      | `TESTY_PLAN_ID`                           | `testy_plan_id`        | id корневого тест-плана                                            |
-| `--testy-root-name` | `TESTY_ROOT_NAME`                         | `testy_root_name`      | имя корня, если план нужно найти или создать по имени              |
-| `--testy-suite`     | `TESTY_SUITE_ID`                          | `testy_suite_id`       | корневой набор для автосоздания кейсов                             |
-| `--testy-sync`      | -                                         | -                      | создать кейсы и структуру перед прогоном                           |
-| -                   | `TESTY_AUTOMATION_KEY`                    | `testy_automation_key` | ключ атрибута для матчинга, по умолчанию `automation_id`           |
-| -                   | `TESTY_KEEP_PARAMS`                       | `testy_keep_params`    | не срезать `[param]`, каждая параметризация будет отдельным кейсом |
-| -                   | `TESTY_OVERRIDE_CASES`                    | `testy_override_cases` | перезаписывать шаги существующего кейса, по умолчанию `true`       |
-| -                   | `TESTY_ATTACH`                            | `testy_attach`         | когда загружать вложения: `failure`, `always`, `never`             |
+| CLI                 | Переменная окружения                      | pytest.ini             | Назначение                                                             |
+| ------------------- |-------------------------------------------|------------------------|------------------------------------------------------------------------|
+| `--testy`           | `TESTY_ENABLED`                           | `testy_enabled`        | включить отправку в TestY                                              |
+| `--testy-url`       | `TESTY_URL`                               | `testy_url`            | базовый адрес TestY                                                    |
+| `--testy-token`     | `TESTY_TOKEN`                             | -                      | токен доступа                                                          |
+| `--testy-project`   | `TESTY_PROJECT_ID`                        | `testy_project_id`     | id проекта                                                             |
+| `--testy-plan`      | `TESTY_PLAN_ID`                           | `testy_plan_id`        | id корневого тест-плана                                                |
+| `--testy-root-name` | `TESTY_ROOT_NAME`                         | `testy_root_name`      | имя корня, если план нужно найти или создать по имени                  |
+| `--testy-suite`     | `TESTY_SUITE_ID`                          | `testy_suite_id`       | корневой набор для автосоздания кейсов                                 |
+| `--testy-sync`      | -                                         | -                      | создать кейсы и структуру перед прогоном                               |
+| -                   | `TESTY_AUTOMATION_KEY`                    | `testy_automation_key` | ключ атрибута для матчинга, по умолчанию `automation_id`               |
+| -                   | `TESTY_KEEP_PARAMS`                       | `testy_keep_params`    | не срезать `[param]`, каждая параметризация будет отдельным кейсом     |
+| -                   | `TESTY_OVERRIDE_CASES`                    | `testy_override_cases` | перезаписывать шаги существующего кейса, по умолчанию `true`           |
+| -                   | `TESTY_ATTACH`                            | `testy_attach`         | когда загружать вложения: `failure`, `always`, `never`                 |
 | -                   | `TESTY_ATTACH_BYTES`                      | `testy_attach_bytes`   | захватывать `allure.attach` из памяти (скриншоты), по умолчанию `true` |
-| -                   | `TESTY_AUTH_SCHEME`                       | `testy_auth_scheme`    | схема авторизации: `Token` или `Bearer`                            |
-| -                   | `TESTY_INSECURE`                          | `testy_insecure`       | отключить проверку TLS-сертификата                                 |
-| -                   | `TESTY_STATUS_PASSED` и остальные статусы | `testy_status_*`       | реальные имена статусов проекта                                    |
+| -                   | `TESTY_AUTH_SCHEME`                       | `testy_auth_scheme`    | схема авторизации: `Token` или `Bearer`                                |
+| -                   | `TESTY_INSECURE`                          | `testy_insecure`       | отключить проверку TLS-сертификата                                     |
+| -                   | `TESTY_STATUS_PASSED` и остальные статусы | `testy_status_*`       | реальные имена статусов проекта                                        |
+| -                   | `TESTY_WORKERS`                           | `testy_workers`        | Количество воркеров клиента для Testy API                              |
 
 ## Авторизация и статусы
 
