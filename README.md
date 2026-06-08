@@ -28,17 +28,55 @@ pip install testy-pytest-adapter
 Плагин подхватывается pytest автоматически. Пока не передан флаг `--testy`
 или не включён `TESTY_ENABLED` / `testy_enabled`, он ничего не делает.
 
+Вот инструкция, оформленная с отдельными блоками кода для копирования:
+
 ## Быстрый старт
 
+### 1. Установите плагин
 ```bash
-pytest --testy \
-  --testy-url="https://testy.example.com" \
-  --testy-token="$TESTY_TOKEN" \
-  --testy-project=1 \
-  --testy-root-name="Autotests"
+pip install testy-pytest-adapter
 ```
 
-После прогона адаптер найдёт подходящие кейсы и запишет результаты в план `1234`.
+### 2. Настройте pytest.ini
+Добавьте в `pytest.ini` (или в секцию `[tool.pytest.ini_options]` файла `pyproject.toml`):
+
+```ini
+[pytest]
+; Параметр включающий плагин по умолчанию, любой запуск теста будет
+; отправлять результат в TestY при наличии токена в окружении
+testy_enabled = true 
+testy_url = https://testy.example.ru
+testy_project_id = 4
+testy_root_name = Autotests
+
+; маппинг статусов на значения вашего проекта TestY
+testy_status_passed = Пройден
+testy_status_failed = Провален
+testy_status_skipped = Пропущен
+testy_status_broken = Сломан
+testy_status_untested = Untested
+```
+
+Токен доступа **не храните в файле** – передавайте его через переменную окружения `TESTY_TOKEN`.
+
+### 3. Создайте структуру в TestY (первый запуск)
+Синхронизация создаст дерево наборов, планов и тест‑кейсы с атрибутом `automation_id`.  
+Тесты **не выполняются**, только собираются (`--collect-only`).
+
+```bash
+export TESTY_TOKEN=<ваш_токен>
+pytest --testy --testy-sync --collect-only tests/
+```
+
+После синхронизации в TestY появится готовая структура.
+
+### 4. Запускайте тесты с отправкой результатов
+Для обычного прогона (в том числе в CI) флаги `--testy-sync` и `--collect-only` **не нужны**.
+
+```bash
+pytest --testy tests/
+```
+Результаты будут записаны в соответствующий тест‑план. При падениях к кейсу автоматически добавятся сообщение об ошибке, трейсбек, вложения и ссылки на CI-джобу.
 
 ## Как сопоставляются тест и кейс
 
@@ -88,7 +126,7 @@ testy_url = https://testy.example.com
 testy_project_id = 4
 testy_root_name = Autotests
 
-; самоподписанный сертификат на стенде:
+; Если вы используете самоподписанный сертификат на стенде:
 testy_insecure = true
 
 ; имена статусов в проекте могут быть локализованы:
@@ -102,7 +140,7 @@ testy_status_untested = Untested
 Тогда для запуска достаточно передать токен через окружение:
 
 ```bash
-TESTY_TOKEN=... pytest --testy --testy-root-name=Autotests
+TESTY_TOKEN=... pytest tests/
 ```
 
 ## Основные опции
@@ -282,26 +320,13 @@ TESTY_KEEP_PARAMS=1
 
 ## Пример для GitLab CI
 
+Если у вас уже заданы параметры в `pytest.ini`, то для запуска из Gitlab CI используйте такой конфиг:
+
 ```yaml
 testy_run:
   stage: test
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $TESTY_PLAN_ID'
   script:
-    - pip install -r requirements.txt testy-pytest-adapter
-    - >
-      pytest -v
-      --testy
-      --testy-url="$TESTY_URL"
-      --testy-token="$TESTY_TOKEN"
-      --testy-project="$TESTY_PROJECT_ID"
-      --testy-plan="$TESTY_PLAN_ID"
-      --alluredir=./allure-results
-      tests
-  artifacts:
-    when: always
-    paths:
-      - ./allure-results
+    - - pytest -v -s tests --testy-token=${TESTY_TOKEN}
 ```
 
 `TESTY_*` удобно передавать как переменные пайплайна.
