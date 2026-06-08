@@ -101,6 +101,13 @@ cases/?case_attributes={"automation_id":"..."}
 Заполнить этот атрибут можно вручную или автоматически через `--testy-sync`.
 Название ключа настраивается через `testy_automation_key`.
 
+По умолчанию адаптер находит нужный `Тест` так: резолвит кейс по `automation_id`, а затем
+ищет его экземпляр в дереве плана `TESTY_PLAN_ID` (с учётом вложенных планов). Если же задан
+`TESTY_TEST_MAP` (его передаёт `testy-gitlab-plugin`), адаптер пишет результат **напрямую**
+в перечисленные там `test_id`, без резолва плана. Это позволяет одним прогоном записать
+результаты в тесты из разных тест-планов и адресно — в конкретные `Тесты`, а не «угадывая» по
+дереву. В этом режиме `TESTY_PLAN_ID`/`testy_root_name` для репортинга не нужны.
+
 ## Конфигурация
 
 Значения берутся в таком порядке:
@@ -152,9 +159,10 @@ TESTY_TOKEN=... pytest tests/
 | `--testy-token`     | `TESTY_TOKEN`                             | -                      | токен доступа                                                          |
 | `--testy-project`   | `TESTY_PROJECT_ID`                        | `testy_project_id`     | id проекта                                                             |
 | `--testy-plan`      | `TESTY_PLAN_ID`                           | `testy_plan_id`        | id корневого тест-плана                                                |
+| -                   | `TESTY_TEST_MAP`                          | -                      | карта `{automation_id: [id тестов]}` для адресной записи результатов   |
 | `--testy-root-name` | `TESTY_ROOT_NAME`                         | `testy_root_name`      | имя корня, если план нужно найти или создать по имени                  |
 | `--testy-suite`     | `TESTY_SUITE_ID`                          | `testy_suite_id`       | корневой набор для автосоздания кейсов                                 |
-| `--testy-sync`      | -                                         | -                      | создать кейсы и структуру перед прогоном                               |
+| `--testy-sync`      | `TESTY_SYNC` или `TESTY_MODE=sync`        | -                      | создать кейсы и структуру перед прогоном                               |
 | -                   | `TESTY_AUTOMATION_KEY`                    | `testy_automation_key` | ключ атрибута для матчинга, по умолчанию `automation_id`               |
 | -                   | `TESTY_KEEP_PARAMS`                       | `testy_keep_params`    | не срезать `[param]`, каждая параметризация будет отдельным кейсом     |
 | -                   | `TESTY_OVERRIDE_CASES`                    | `testy_override_cases` | перезаписывать шаги существующего кейса, по умолчанию `true`           |
@@ -210,6 +218,11 @@ pytest --collect-only --testy --testy-sync \
   --testy-token="$TESTY_TOKEN" \
   --testy-project=4
 ```
+
+Sync-шаг можно включить не только флагом `--testy-sync`, но и переменной окружения —
+`TESTY_SYNC=1` или `TESTY_MODE=sync`. Это нужно для запуска из CI без правки команды pytest:
+например, `testy-gitlab-plugin` при нажатии «Sync autotests» сам выставляет `TESTY_MODE=sync`.
+Джоба синхронизации должна по-прежнему собирать тесты без выполнения (`--collect-only`).
 
 Дерево суитов и тест-планов в TestY строится из разметки Allure:
 
