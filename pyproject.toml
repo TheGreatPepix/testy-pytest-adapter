@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "testy-pytest-adapter"
-version = "1.0.3a"
+version = "1.0.4"
 description = "Pytest plugin for sync Tests with TestY TMS"
 readme = "README.md"
 requires-python = ">=3.10"
