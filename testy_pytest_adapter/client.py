@@ -646,8 +646,8 @@ class TestyClient:
         if case_id is None:
             return False
 
-        test_id = self._test_by_case.get(case_id)
-        if test_id is None:
+        test_ids = self._resolve_test_ids(result.external_id, case_id)
+        if not test_ids:
             log.warning(
                 "TestY: case %s is not part of plan %s — skipping result for %s",
                 case_id, self.cfg.plan_id, result.nodeid,
@@ -688,7 +688,6 @@ class TestyClient:
                 )
 
         payload = {
-            "test": test_id,
             "status": status_id,
             "project": self.cfg.project_id,
             "comment": _comment_with_images(_compose_comment(result), image_attachments),
@@ -699,17 +698,26 @@ class TestyClient:
             payload["attachments"] = attachment_ids
         if steps_results:
             payload["steps_results"] = steps_results
-        resp = self.session.post(
-            f"{self.cfg.api}/results/",
-            json=payload,
-            timeout=self.cfg.timeout,
-            verify=self.cfg.verify_ssl,
-        )
-        if resp.status_code >= 400:
-            log.error("TestY: failed to post result for %s: %s %s",
-                      result.nodeid, resp.status_code, resp.text[:500])
-            return False
-        return True
+
+        ok = True
+        for test_id in test_ids:
+            resp = self.session.post(
+                f"{self.cfg.api}/results/",
+                json={**payload, "test": test_id},
+                timeout=self.cfg.timeout,
+                verify=self.cfg.verify_ssl,
+            )
+            if resp.status_code >= 400:
+                log.error("TestY: failed to post result for %s (test %s): %s %s",
+                          result.nodeid, test_id, resp.status_code, resp.text[:500])
+                ok = False
+        return ok
+
+    def _resolve_test_ids(self, external_id: str, case_id: int) -> list[int]:
+        if self.cfg.test_map:
+            return self.cfg.test_map.get(external_id, [])
+        test_id = self._test_by_case.get(case_id)
+        return [test_id] if test_id is not None else []
 
     def _clone_for_thread(self) -> "TestyClient":
         clone = object.__new__(TestyClient)
