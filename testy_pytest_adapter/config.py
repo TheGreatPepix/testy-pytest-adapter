@@ -31,6 +31,8 @@ class TestyConfig:
     verify_ssl: bool = True
     timeout: int = 30
     workers: int = 8
+    sync: bool = False
+    test_map: dict = field(default_factory=dict)
 
     @property
     def api(self) -> str:
@@ -74,6 +76,11 @@ class TestyConfig:
         if not enabled:
             return None
 
+        sync = (
+            bool(config.getoption("testy_sync", default=False))
+            or _truthy(os.environ.get("TESTY_SYNC"))
+            or os.environ.get("TESTY_MODE", "").strip().lower() == "sync"
+        )
         url = opt("testy_url", "TESTY_URL", "testy_url")
         token = opt("testy_token", "TESTY_TOKEN")
         project_id = opt("testy_project", "TESTY_PROJECT_ID", "testy_project_id")
@@ -81,13 +88,14 @@ class TestyConfig:
         root_name = opt("testy_root_name", "TESTY_ROOT_NAME", "testy_root_name", "")
         suite_name = opt("testy_suite_name", "TESTY_SUITE_NAME", "testy_suite_name", root_name)
         plan_name = opt("testy_plan_name", "TESTY_PLAN_NAME", "testy_plan_name", root_name)
+        test_map = _test_map_from_env(os.environ.get("TESTY_TEST_MAP"))
 
         missing = [n for n, v in [
             ("TESTY_URL", url), ("TESTY_TOKEN", token),
             ("TESTY_PROJECT_ID", project_id),
         ] if not v]
-        if not plan_id and not plan_name:
-            missing.append("TESTY_PLAN_ID or TESTY_PLAN_NAME/TESTY_ROOT_NAME")
+        if not plan_id and not plan_name and not test_map:
+            missing.append("TESTY_PLAN_ID or TESTY_PLAN_NAME/TESTY_ROOT_NAME or TESTY_TEST_MAP")
         if missing:
             raise ValueError(
                 "TestY reporting enabled but required settings are missing: "
@@ -122,6 +130,8 @@ class TestyConfig:
             pytest_targets=_targets_from_env(os.environ.get("TESTY_PYTEST_TARGETS")),
             verify_ssl=not bool_opt(None, "TESTY_INSECURE", "testy_insecure"),
             workers=int(os.environ.get("TESTY_WORKERS") or ini("testy_workers") or 8),
+            sync=sync,
+            test_map=test_map,
         )
 
     def should_attach(self, outcome: str) -> bool:
@@ -150,3 +160,26 @@ def _targets_from_env(value: str | None) -> list[str]:
     if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
         raise ValueError("TESTY_PYTEST_TARGETS must be a JSON array of strings")
     return [item.strip().replace("\\", "/") for item in data if item.strip()]
+
+
+def _test_map_from_env(value: str | None) -> dict[str, list[int]]:
+    if value in (None, ""):
+        return {}
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "TESTY_TEST_MAP must be a JSON object of {external_id: [test_id, ...]}",
+        ) from exc
+    if not isinstance(data, dict):
+        raise ValueError(
+            "TESTY_TEST_MAP must be a JSON object of {external_id: [test_id, ...]}",
+        )
+    result: dict[str, list[int]] = {}
+    for key, raw_ids in data.items():
+        ids = raw_ids if isinstance(raw_ids, list) else [raw_ids]
+        normalized = str(key).strip().replace("\\", "/")
+        if not normalized:
+            continue
+        result[normalized] = [int(test_id) for test_id in ids]
+    return result

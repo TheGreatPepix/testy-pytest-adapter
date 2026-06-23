@@ -70,7 +70,7 @@ def pytest_configure(config):
         cfg = TestyConfig.from_pytest(config)
     except ValueError as exc:
         raise pytest.UsageError(str(exc)) from exc
-    if cfg is not None and config.getoption("testy_sync", default=False) and _xdist_requested(config):
+    if cfg is not None and cfg.sync and _xdist_requested(config):
         raise pytest.UsageError("TestY sync must run without xdist; remove -n/--numprocesses")
     config._testy = _TestyState(cfg) if cfg else None
     if config._testy is not None:
@@ -106,7 +106,7 @@ def pytest_runtest_teardown(item):
 
 def pytest_collection_finish(session):
     state: "_TestyState | None" = getattr(session.config, "_testy", None)
-    if state is None or not session.config.getoption("testy_sync", default=False):
+    if state is None or not state.cfg.sync:
         return
     state.sync(session.items)
 
@@ -242,9 +242,12 @@ class _TestyState:
             return
         try:
             client = TestyClient(self.cfg)
-            client.ensure_roots(need_plan=True)
             client.load_statuses()
-            client.load_plan_tests()
+            if self.cfg.test_map:
+                pass
+            else:
+                client.ensure_roots(need_plan=True)
+                client.load_plan_tests()
         except Exception as exc:  # noqa: BLE001 — reporting must never crash CI
             log.error("TestY: could not initialise client: %s", exc)
             return
