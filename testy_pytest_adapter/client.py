@@ -277,9 +277,6 @@ class TestyClient:
             suite_id = self._suite_cache[key]
             self._ensure_suite_attributes(suite_id, attributes)
             return suite_id
-        # Prefer matching by the stable automation attribute (derived from the
-        # nodeid path, not the Allure label) so a renamed parentSuite/suite is
-        # found and renamed in place instead of spawning an orphan sibling.
         desired_attr = (attributes or {}).get(self.cfg.automation_key) or None
         match_by_attr: dict | None = None
         match_by_name: dict | None = None
@@ -545,10 +542,6 @@ class TestyClient:
         key = (parent_id, name)
         if key in self._plan_cache:
             return self._plan_cache[key]
-        # Same identity trick as suites: match plan nodes by their stable
-        # automation attribute (derived from the nodeid path) so a renamed
-        # parentSuite/suite renames the existing plan node in place instead of
-        # spawning a new one and orphaning the old test instances.
         desired_attr = (attributes or {}).get(self.cfg.automation_key) or None
         match_by_attr: dict | None = None
         match_by_name: dict | None = None
@@ -583,9 +576,6 @@ class TestyClient:
         return plan_id
 
     def _rename_plan(self, plan_id: int, name: str) -> None:
-        # name only — NEVER send test_cases here: the testplan update treats it as
-        # a full-set replacement and would delete the instances/results of cases
-        # missing from the payload.
         resp = self.session.patch(
             f"{self.cfg.api}/testplans/{plan_id}/",
             json={"name": name[:255]},
@@ -617,7 +607,7 @@ class TestyClient:
             return
         resp = self.session.patch(
             f"{self.cfg.api}/testplans/{plan_id}/",
-            json={"attributes": merged},  # no test_cases — see _rename_plan note
+            json={"attributes": merged},
             timeout=self.cfg.timeout,
             verify=self.cfg.verify_ssl,
         )
