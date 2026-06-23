@@ -106,10 +106,6 @@ class TestyConfig:
             token=str(token),
             project_id=int(project_id),
             plan_id=_int_or_none(plan_id),
-            automation_key=opt(
-                None, "TESTY_AUTOMATION_KEY",
-                "testy_automation_key", "automation_id",
-            ),
             strip_params=not bool_opt(None, "TESTY_KEEP_PARAMS", "testy_keep_params"),
             auth_scheme=opt(None, "TESTY_AUTH_SCHEME", "testy_auth_scheme", "Token"),
             status_names=status_names,

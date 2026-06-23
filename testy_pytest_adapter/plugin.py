@@ -41,8 +41,6 @@ def pytest_addoption(parser):
     parser.addini("testy_suite_name", "Root TestSuite name fallback.")
     parser.addini("testy_plan_name", "Root TestPlan name fallback.")
     parser.addini("testy_suite_id", "Root TestY suite id for auto-created cases.")
-    parser.addini("testy_automation_key", "TestCase attribute key for nodeid matching.",
-                  default="automation_id")
     parser.addini("testy_override_cases",
                   "Re-write an existing case when its Allure steps changed "
                   "(False = seed stepless cases once, never overwrite).",
@@ -227,7 +225,11 @@ class _TestyState:
                 if cid is not None:
                     if self.cfg.plan_id is None:
                         raise ValueError("TestY plan root was not resolved")
-                    leaf_plan = client.ensure_plan_path(suite_path, self.cfg.plan_id)
+                    leaf_plan = client.ensure_plan_path(
+                        suite_path,
+                        self.cfg.plan_id,
+                        attribute_values=suite_attribute_paths,
+                    )
                     cases_by_plan.setdefault(leaf_plan, set()).add(cid)
             for plan_id, plan_case_ids in sorted(cases_by_plan.items()):
                 client.sync_plan(sorted(plan_case_ids), plan_id=plan_id)

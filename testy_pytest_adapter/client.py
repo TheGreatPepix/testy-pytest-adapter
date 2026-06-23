@@ -277,13 +277,28 @@ class TestyClient:
             suite_id = self._suite_cache[key]
             self._ensure_suite_attributes(suite_id, attributes)
             return suite_id
+        # Prefer matching by the stable automation attribute (derived from the
+        # nodeid path, not the Allure label) so a renamed parentSuite/suite is
+        # found and renamed in place instead of spawning an orphan sibling.
+        desired_attr = (attributes or {}).get(self.cfg.automation_key) or None
+        match_by_attr: dict | None = None
+        match_by_name: dict | None = None
         for suite in self._paged("suites/", project=self.cfg.project_id,
                                  parent=parent_id if parent_id else "null"):
-            if suite.get("name") == name:
-                suite_id = int(suite["id"])
-                self._suite_cache[key] = suite_id
-                self._ensure_suite_attributes(suite_id, attributes, suite.get("attributes"))
-                return suite_id
+            suite_attrs = suite.get("attributes") or {}
+            if desired_attr and suite_attrs.get(self.cfg.automation_key) == desired_attr:
+                match_by_attr = suite
+                break
+            if match_by_name is None and suite.get("name") == name:
+                match_by_name = suite
+        suite = match_by_attr or match_by_name
+        if suite is not None:
+            suite_id = int(suite["id"])
+            self._suite_cache[key] = suite_id
+            if match_by_attr is not None and suite.get("name") != name:
+                self._rename_suite(suite_id, name)
+            self._ensure_suite_attributes(suite_id, attributes, suite.get("attributes"))
+            return suite_id
         payload = {"name": name[:255], "project": self.cfg.project_id}
         if parent_id:
             payload["parent"] = parent_id
@@ -342,9 +357,23 @@ class TestyClient:
         self._suite_attrs_cache.add(cache_key)
         log.info("TestY: updated suite %s attributes with %s", suite_id, sorted(desired))
 
+    def _rename_suite(self, suite_id: int, name: str) -> None:
+        resp = self.session.patch(
+            f"{self.cfg.api}/suites/{suite_id}/",
+            json={"name": name[:255]},
+            timeout=self.cfg.timeout,
+            verify=self.cfg.verify_ssl,
+        )
+        if resp.status_code >= 400:
+            log.error("TestY: failed to rename suite %s to %r: %s %s",
+                      suite_id, name, resp.status_code, resp.text[:300])
+            return
+        log.info("TestY: renamed suite %s -> %r", suite_id, name)
+
     def ensure_case(self, external_id: str, name: str, suite_id: int | None = None) -> int | None:
         case_id = self.resolve_case_by_external_id(external_id)
         if case_id is not None:
+            self._reconcile_case(case_id, name, suite_id or self.cfg.suite_id)
             return case_id
         target_suite = suite_id or self.cfg.suite_id
         if not target_suite:
@@ -368,6 +397,97 @@ class TestyClient:
         self._case_by_external[external_id] = case_id
         log.info("TestY: created case %s for %r", case_id, external_id)
         return case_id
+
+    def _reconcile_case(self, case_id: int, name: str, suite_id: int | None) -> None:
+        if not self.cfg.override_cases:
+            return
+        try:
+            case = self._get(f"cases/{case_id}/")
+        except requests.HTTPError as exc:
+            log.warning("TestY: cannot read case %s to reconcile: %s", case_id, exc)
+            return
+        suite = case.get("suite")
+        current_suite_id = suite["id"] if isinstance(suite, dict) else suite
+        name_changed = bool(name) and case.get("name") != name
+        suite_changed = suite_id is not None and current_suite_id != suite_id
+        if not name_changed and not suite_changed:
+            return
+        if not name_changed:
+            self._move_case(case_id, suite_id)
+            return
+        payload = self._case_put_payload(
+            case,
+            name=name,
+            suite_id=suite_id if suite_changed else None,
+        )
+        resp = self.session.put(f"{self.cfg.api}/cases/{case_id}/", json=payload,
+                                timeout=self.cfg.timeout, verify=self.cfg.verify_ssl)
+        if resp.status_code >= 400:
+            log.error("TestY: failed to reconcile case %s: %s %s",
+                      case_id, resp.status_code, resp.text[:300])
+            return
+        changes = [f"name -> {name!r}"]
+        if suite_changed:
+            changes.append(f"suite -> {suite_id}")
+        log.info("TestY: reconciled case %s (%s)", case_id, ", ".join(changes))
+
+    def _move_case(self, case_id: int, suite_id: int) -> None:
+        resp = self.session.put(
+            f"{self.cfg.api}/cases/bulk-update/",
+            json={
+                "project": self.cfg.project_id,
+                "current_suite": None,
+                "included_cases": [case_id],
+                "excluded_cases": [],
+                "suite": suite_id,
+                "filter_conditions": {},
+            },
+            timeout=self.cfg.timeout,
+            verify=self.cfg.verify_ssl,
+        )
+        if resp.status_code >= 400:
+            log.error("TestY: failed to move case %s to suite %s: %s %s",
+                      case_id, suite_id, resp.status_code, resp.text[:300])
+            return
+        log.info("TestY: moved case %s -> suite %s", case_id, suite_id)
+
+    def _case_put_payload(
+        self,
+        case: dict,
+        *,
+        name: str | None = None,
+        suite_id: int | None = None,
+        steps: list[dict] | None = None,
+    ) -> dict:
+        suite = case.get("suite")
+        current_suite_id = suite["id"] if isinstance(suite, dict) else suite
+        payload = {
+            "name": (name or case.get("name") or "")[:255],
+            "project": self.cfg.project_id,
+            "suite": suite_id if suite_id is not None else current_suite_id,
+            "setup": case.get("setup", ""),
+            "scenario": case.get("scenario", ""),
+            "expected": case.get("expected", ""),
+            "teardown": case.get("teardown", ""),
+            "description": case.get("description", ""),
+            "attributes": case.get("attributes", {}),
+        }
+        if steps is None and case.get("is_steps"):
+            steps = [
+                {
+                    "name": str(step.get("name") or "")[:255],
+                    "scenario": step.get("scenario", ""),
+                    "expected": step.get("expected", ""),
+                    "sort_order": int(step.get("sort_order") or index + 1),
+                }
+                for index, step in enumerate(_ordered_steps(case.get("steps") or []))
+            ]
+        if steps:
+            payload["is_steps"] = True
+            payload["steps"] = steps
+        elif not payload["scenario"]:
+            payload["scenario"] = "Created by testy-pytest sync"
+        return payload
 
     def sync_plan(self, case_ids: list[int], plan_id: int | None = None) -> None:
         self.ensure_roots(need_plan=True)
@@ -402,21 +522,53 @@ class TestyClient:
             tests[int(test["case"])] = int(test["id"])
         return tests
 
-    def ensure_plan_path(self, path: list[str], root_id: int) -> int:
+    def ensure_plan_path(
+        self,
+        path: list[str],
+        root_id: int,
+        attribute_values: list[str] | None = None,
+    ) -> int:
         parent = root_id
-        for name in path:
-            parent = self._ensure_child_plan(name, parent)
+        for index, name in enumerate(path):
+            attributes = None
+            if attribute_values and index < len(attribute_values):
+                attributes = {self.cfg.automation_key: attribute_values[index]}
+            parent = self._ensure_child_plan(name, parent, attributes=attributes)
         return parent
 
-    def _ensure_child_plan(self, name: str, parent_id: int) -> int:
+    def _ensure_child_plan(
+        self,
+        name: str,
+        parent_id: int,
+        attributes: dict | None = None,
+    ) -> int:
         key = (parent_id, name)
         if key in self._plan_cache:
             return self._plan_cache[key]
+        # Same identity trick as suites: match plan nodes by their stable
+        # automation attribute (derived from the nodeid path) so a renamed
+        # parentSuite/suite renames the existing plan node in place instead of
+        # spawning a new one and orphaning the old test instances.
+        desired_attr = (attributes or {}).get(self.cfg.automation_key) or None
+        match_by_attr: dict | None = None
+        match_by_name: dict | None = None
         for plan in self._paged("testplans/", project=self.cfg.project_id, parent=parent_id):
-            if plan.get("name") == name:
-                self._plan_cache[key] = int(plan["id"])
-                return int(plan["id"])
-        payload = self._plan_payload(name, parent_id)
+            plan_attrs = plan.get("attributes") or {}
+            if desired_attr and plan_attrs.get(self.cfg.automation_key) == desired_attr:
+                match_by_attr = plan
+                break
+            if match_by_name is None and plan.get("name") == name:
+                match_by_name = plan
+        plan = match_by_attr or match_by_name
+        if plan is not None:
+            plan_id = int(plan["id"])
+            self._plan_cache[key] = plan_id
+            if match_by_attr is not None and plan.get("name") != name:
+                self._rename_plan(plan_id, name)
+            else:
+                self._ensure_plan_attributes(plan_id, attributes, plan.get("attributes"))
+            return plan_id
+        payload = self._plan_payload(name, parent_id, attributes=attributes)
         resp = self.session.post(f"{self.cfg.api}/testplans/", json=payload,
                                  timeout=self.cfg.timeout, verify=self.cfg.verify_ssl)
         if resp.status_code >= 400:
@@ -430,7 +582,57 @@ class TestyClient:
         log.info("TestY: created plan %s %r under %s", plan_id, name, parent_id)
         return plan_id
 
-    def _plan_payload(self, name: str, parent_id: int | None = None) -> dict:
+    def _rename_plan(self, plan_id: int, name: str) -> None:
+        # name only — NEVER send test_cases here: the testplan update treats it as
+        # a full-set replacement and would delete the instances/results of cases
+        # missing from the payload.
+        resp = self.session.patch(
+            f"{self.cfg.api}/testplans/{plan_id}/",
+            json={"name": name[:255]},
+            timeout=self.cfg.timeout,
+            verify=self.cfg.verify_ssl,
+        )
+        if resp.status_code >= 400:
+            log.error("TestY: failed to rename plan %s to %r: %s %s",
+                      plan_id, name, resp.status_code, resp.text[:300])
+            return
+        log.info("TestY: renamed plan %s -> %r", plan_id, name)
+
+    def _ensure_plan_attributes(
+        self,
+        plan_id: int,
+        attributes: dict | None,
+        current: dict | None,
+    ) -> None:
+        desired = {key: value for key, value in (attributes or {}).items() if value}
+        if not desired:
+            return
+        merged = dict(current or {})
+        changed = False
+        for key, value in desired.items():
+            if merged.get(key) != value:
+                merged[key] = value
+                changed = True
+        if not changed:
+            return
+        resp = self.session.patch(
+            f"{self.cfg.api}/testplans/{plan_id}/",
+            json={"attributes": merged},  # no test_cases — see _rename_plan note
+            timeout=self.cfg.timeout,
+            verify=self.cfg.verify_ssl,
+        )
+        if resp.status_code >= 400:
+            log.error("TestY: failed to update plan %s attributes: %s %s",
+                      plan_id, resp.status_code, resp.text[:300])
+            return
+        log.info("TestY: updated plan %s attributes with %s", plan_id, sorted(desired))
+
+    def _plan_payload(
+        self,
+        name: str,
+        parent_id: int | None = None,
+        attributes: dict | None = None,
+    ) -> dict:
         now = dt.datetime.now(dt.timezone.utc)
         payload = {
             "name": name[:255],
@@ -441,6 +643,9 @@ class TestyClient:
         }
         if parent_id:
             payload["parent"] = parent_id
+        attrs = {key: value for key, value in (attributes or {}).items() if value}
+        if attrs:
+            payload["attributes"] = attrs
         return payload
 
 
