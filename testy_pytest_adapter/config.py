@@ -33,6 +33,16 @@ class TestyConfig:
     workers: int = 8
     sync: bool = False
     test_map: dict = field(default_factory=dict)
+    targets_url: str = ""
+    run_id: str = ""
+
+    @property
+    def targets_endpoint(self) -> str:
+        if self.targets_url:
+            return self.targets_url
+        if self.run_id:
+            return f"{self.url.rstrip('/')}/plugins/gitlab-runner/api/runs/{self.run_id}/targets/"
+        return ""
 
     @property
     def api(self) -> str:
@@ -89,13 +99,19 @@ class TestyConfig:
         suite_name = opt("testy_suite_name", "TESTY_SUITE_NAME", "testy_suite_name", root_name)
         plan_name = opt("testy_plan_name", "TESTY_PLAN_NAME", "testy_plan_name", root_name)
         test_map = _test_map_from_env(os.environ.get("TESTY_TEST_MAP"))
+        targets_url = str(os.environ.get("TESTY_TARGETS_URL") or "").strip()
+        run_id = str(os.environ.get("TESTY_RUN_ID") or "").strip()
+        remote_selection = bool(targets_url or run_id)
 
         missing = [n for n, v in [
             ("TESTY_URL", url), ("TESTY_TOKEN", token),
             ("TESTY_PROJECT_ID", project_id),
         ] if not v]
-        if not plan_id and not plan_name and not test_map:
-            missing.append("TESTY_PLAN_ID or TESTY_PLAN_NAME/TESTY_ROOT_NAME or TESTY_TEST_MAP")
+        if not plan_id and not plan_name and not test_map and not remote_selection:
+            missing.append(
+                "TESTY_PLAN_ID or TESTY_PLAN_NAME/TESTY_ROOT_NAME or "
+                "TESTY_TEST_MAP or TESTY_RUN_ID/TESTY_TARGETS_URL"
+            )
         if missing:
             raise ValueError(
                 "TestY reporting enabled but required settings are missing: "
@@ -132,6 +148,8 @@ class TestyConfig:
             workers=int(os.environ.get("TESTY_WORKERS") or ini("testy_workers") or 8),
             sync=sync,
             test_map=test_map,
+            targets_url=targets_url,
+            run_id=run_id,
         )
 
     def should_attach(self, outcome: str) -> bool:
@@ -150,6 +168,27 @@ def _int_or_none(value):
     return int(value) if value not in (None, "") else None
 
 
+def normalize_targets(data) -> list[str]:
+    """Validate/normalize a list of nodeid targets (from env JSON or a remote API)."""
+    if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+        raise ValueError("targets must be a JSON array of strings")
+    return [item.strip().replace("\\", "/") for item in data if item.strip()]
+
+
+def normalize_test_map(data) -> dict[str, list[int]]:
+    """Validate/normalize a {external_id: [test_id, ...]} map (from env JSON or API)."""
+    if not isinstance(data, dict):
+        raise ValueError("test map must be a JSON object of {external_id: [test_id, ...]}")
+    result: dict[str, list[int]] = {}
+    for key, raw_ids in data.items():
+        ids = raw_ids if isinstance(raw_ids, list) else [raw_ids]
+        normalized = str(key).strip().replace("\\", "/")
+        if not normalized:
+            continue
+        result[normalized] = [int(test_id) for test_id in ids]
+    return result
+
+
 def _targets_from_env(value: str | None) -> list[str]:
     if value in (None, ""):
         return []
@@ -157,9 +196,7 @@ def _targets_from_env(value: str | None) -> list[str]:
         data = json.loads(value)
     except json.JSONDecodeError as exc:
         raise ValueError("TESTY_PYTEST_TARGETS must be a JSON array of strings") from exc
-    if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
-        raise ValueError("TESTY_PYTEST_TARGETS must be a JSON array of strings")
-    return [item.strip().replace("\\", "/") for item in data if item.strip()]
+    return normalize_targets(data)
 
 
 def _test_map_from_env(value: str | None) -> dict[str, list[int]]:
@@ -171,15 +208,4 @@ def _test_map_from_env(value: str | None) -> dict[str, list[int]]:
         raise ValueError(
             "TESTY_TEST_MAP must be a JSON object of {external_id: [test_id, ...]}",
         ) from exc
-    if not isinstance(data, dict):
-        raise ValueError(
-            "TESTY_TEST_MAP must be a JSON object of {external_id: [test_id, ...]}",
-        )
-    result: dict[str, list[int]] = {}
-    for key, raw_ids in data.items():
-        ids = raw_ids if isinstance(raw_ids, list) else [raw_ids]
-        normalized = str(key).strip().replace("\\", "/")
-        if not normalized:
-            continue
-        result[normalized] = [int(test_id) for test_id in ids]
-    return result
+    return normalize_test_map(data)
