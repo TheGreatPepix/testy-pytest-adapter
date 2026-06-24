@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from .config import TestyConfig
+from .config import TestyConfig, normalize_targets, normalize_test_map
 from .models import CaseResult
 
 log = logging.getLogger("testy_pytest")
@@ -179,6 +179,14 @@ class TestyClient:
         results = data["results"] if isinstance(data, dict) else data
         for status in results:
             self._status_ids[status["name"].lower()] = status["id"]
+
+    def fetch_targets(self, url: str) -> tuple[list[str], dict[str, list[int]]]:
+        resp = self.session.get(url, timeout=self.cfg.timeout, verify=self.cfg.verify_ssl)
+        resp.raise_for_status()
+        data = resp.json()
+        targets = normalize_targets(data.get("targets") or [])
+        test_map = normalize_test_map(data.get("target_map") or data.get("test_map") or {})
+        return targets, test_map
 
     def load_plan_tests(self) -> None:
         self.ensure_roots(need_plan=True)

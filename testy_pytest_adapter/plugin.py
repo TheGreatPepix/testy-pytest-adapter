@@ -72,10 +72,29 @@ def pytest_configure(config):
         raise pytest.UsageError(str(exc)) from exc
     if cfg is not None and cfg.sync and _xdist_requested(config):
         raise pytest.UsageError("TestY sync must run without xdist; remove -n/--numprocesses")
+    if cfg is not None:
+        _resolve_remote_targets(cfg)
     config._testy = _TestyState(cfg) if cfg else None
     if config._testy is not None:
         step_capture.install()
         attachments.install(cfg.attach_bytes)
+
+
+def _resolve_remote_targets(cfg: TestyConfig) -> None:
+    endpoint = cfg.targets_endpoint
+    if not endpoint or cfg.pytest_targets or cfg.test_map:
+        return
+    client = TestyClient(cfg)
+    try:
+        targets, test_map = client.fetch_targets(endpoint)
+    except Exception as exc:  # noqa: BLE001
+        raise pytest.UsageError(
+            f"TestY: failed to fetch run selection from {endpoint}: {exc}"
+        ) from exc
+    cfg.pytest_targets = targets
+    cfg.test_map = test_map
+    log.info("TestY: fetched %s target(s) and %s test-map entr(ies) from %s",
+             len(targets), len(test_map), endpoint)
 
 
 def pytest_runtest_setup(item):
