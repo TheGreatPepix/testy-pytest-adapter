@@ -1,3 +1,3 @@
-from testy_pytest_adapter import attach  # noqa: F401
+from testy_pytest_adapter import attach, case  # noqa: F401
 
-__all__ = ["attach"]
+__all__ = ["attach", "case"]

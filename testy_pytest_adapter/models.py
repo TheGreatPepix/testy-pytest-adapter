@@ -22,9 +22,13 @@ class CaseResult:
     attachments: list[str] = field(default_factory=list)
     steps: list = field(default_factory=list)
     variants: list = field(default_factory=list)
+    case_id: int | None = None  # set when linked explicitly via @testy.case(id)
+    external_ids: list = field(default_factory=list)
 
     @property
     def key(self) -> str:
+        if self.case_id is not None:
+            return f"case:{self.case_id}"
         return f"ext:{self.external_id}"
 
     @property

@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 import pytest
 
-from . import allure_meta, attachments, step_capture
+from . import allure_meta, api, attachments, step_capture
 from .client import TestyClient
 from .config import TestyConfig
 from .matcher import external_id
@@ -66,6 +66,10 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        f"{api.MARKER}(*case_ids): link the test to existing TestY case(s) by id.",
+    )
     try:
         cfg = TestyConfig.from_pytest(config)
     except ValueError as exc:
@@ -138,6 +142,7 @@ def pytest_collection_modifyitems(config, items):
         item for item in items
         if _matches_any_target(item.nodeid, state.cfg.pytest_targets)
     ]
+    selected = _with_case_siblings(selected, items)
     deselected = [item for item in items if item not in selected]
     if deselected:
         config.hook.pytest_deselected(items=deselected)
@@ -171,6 +176,7 @@ class _TestyState:
     def __init__(self, cfg: TestyConfig):
         self.cfg = cfg
         self.results: dict[str, CaseResult] = {}  # result.key -> latest result
+        self._keys_by_nodeid: dict[str, list[str]] = {}
 
     def serialized_results(self) -> list[dict]:
         return [asdict(result) for result in self.results.values()]
@@ -185,8 +191,10 @@ class _TestyState:
             self.results[res.key] = res
             return
         combined = (prev.variants or []) + (res.variants or [])
+        externals = list(dict.fromkeys((prev.external_ids or []) + (res.external_ids or [])))
         winner = res if _severity(res.outcome) > _severity(prev.outcome) else prev
         winner.variants = combined
+        winner.external_ids = externals
         self.results[res.key] = winner
 
     def record(self, item, report) -> None:
@@ -195,27 +203,54 @@ class _TestyState:
         duration = int(getattr(report, "duration", 0) or 0)
         files = attachments.pop(item.nodeid)
         steps = step_capture.pop(item.nodeid)
-        label = _param_label(item)
-        variants = [[label, outcome]] if label else []
+        ext = external_id(item.nodeid, strip_params=self.cfg.strip_params)
+        linked = api.case_ids(item)
 
-        self._absorb(CaseResult(
-            outcome=outcome,
-            external_id=external_id(item.nodeid, strip_params=self.cfg.strip_params),
-            comment=comment, execution_time=duration, nodeid=item.nodeid,
-            attachments=files, steps=steps, variants=list(variants),
-        ))
+        if not linked:
+            label = _param_label(item)
+            variants = [[label, outcome]] if label else []
+            self._record(item, CaseResult(
+                outcome=outcome, external_id=ext,
+                comment=comment, execution_time=duration, nodeid=item.nodeid,
+                attachments=files, steps=steps, variants=list(variants),
+                external_ids=[ext],
+            ))
+            return
+
+        for case_id in linked:
+            self._record(item, CaseResult(
+                outcome=outcome, external_id=ext,
+                comment=comment, execution_time=duration, nodeid=item.nodeid,
+                attachments=list(files), steps=steps,
+                # several tests may report into one case — label variants by nodeid
+                variants=[[item.nodeid, outcome]],
+                case_id=case_id, external_ids=[ext],
+            ))
+
+    def _record(self, item, res: CaseResult) -> None:
+        keys = self._keys_by_nodeid.setdefault(item.nodeid, [])
+        if res.key not in keys:
+            keys.append(res.key)
+        self._absorb(res)
 
     def add_attachments(self, item, files: list[str]) -> None:
-        key = f"ext:{external_id(item.nodeid, strip_params=self.cfg.strip_params)}"
-        res = self.results.get(key)
-        if res is not None:
-            res.attachments = list(res.attachments) + list(files)
+        for key in self._keys_by_nodeid.get(item.nodeid, []):
+            res = self.results.get(key)
+            if res is not None:
+                res.attachments = list(res.attachments) + list(files)
 
     def sync(self, items) -> None:
         auto: dict[str, tuple[list, list, str]] = {}
+        links: dict[int, list[str]] = {}  # case id -> external ids linked via @testy.case
         root_attribute_path = ""
         for item in items:
             ext = external_id(item.nodeid, strip_params=self.cfg.strip_params)
+            linked = api.case_ids(item)
+            for case_id in linked:
+                if ext not in links.setdefault(case_id, []):
+                    links[case_id].append(ext)
+            if linked:
+                continue
             if ext not in auto:
                 suite_path = allure_meta.suite_path(item)
                 name = allure_meta.title(item) or item.name
@@ -225,8 +260,19 @@ class _TestyState:
                     name,
                 )
                 root_attribute_path = root_attribute_path or allure_meta.root_attribute_path(item)
+        linked_exts = {ext for exts in links.values() for ext in exts}
+        for ext in sorted(linked_exts & set(auto)):
+            # e.g. only some parametrize variants carry @testy.case: never auto-create
+            # a second case under the same automation_id as the linked manual one.
+            log.warning("TestY: %s is partially linked via @testy.case — "
+                        "unlinked variants are not synced", ext)
+            del auto[ext]
         try:
             client = TestyClient(self.cfg)
+            if links:
+                client.link_cases(links)
+            if not auto:
+                return
             client.ensure_roots(need_suite=bool(auto), need_plan=True)
             cases_by_plan: dict[int, set[int]] = {}
             if self.cfg.suite_id is not None and root_attribute_path:
@@ -304,6 +350,23 @@ def _comment(report, limit: int = 5000) -> str:
     if report.skipped and isinstance(getattr(report, "longrepr", None), tuple):
         return str(report.longrepr[2])
     return str(getattr(report, "longrepr", "") or "")[-limit:]
+
+
+def _with_case_siblings(selected: list, items: list) -> list:
+    """Also select tests linked to the same @testy.case ids as the selected ones.
+
+    A case keeps a single ``automation_id``, so a run started from TestY targets one
+    nodeid; other tests covering that case must run too, or the case is reported
+    from a partial run.
+    """
+    wanted = {case_id for item in selected for case_id in api.case_ids(item)}
+    if not wanted:
+        return selected
+    chosen = set(map(id, selected))
+    return [
+        item for item in items
+        if id(item) in chosen or wanted.intersection(api.case_ids(item))
+    ]
 
 
 def _matches_any_target(nodeid: str, targets: list[str]) -> bool:

@@ -10,11 +10,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+from . import step_capture
 from .config import TestyConfig, normalize_targets, normalize_test_map
 from .models import CaseResult
 
 log = logging.getLogger("testy_pytest")
 _FAILURE_OUTCOMES = {"failed", "error", "xpassed"}
+# Marks a manual case linked via @testy.case: the adapter never rewrites its steps, name
+# or suite, and the runner's history cleanup leaves its results and versions alone.
+MANUAL_KEY = "automation_manual"
 
 def _flatten_steps(tree: list) -> list[dict]:
     steps: list[dict] = []
@@ -74,6 +78,14 @@ def _steps_signature(steps: list[dict]) -> list[tuple[str, str, str]]:
     ]
 
 
+def _tms_owned(case: dict) -> bool:
+    return MANUAL_KEY in (case.get("attributes") or {})
+
+
+def _ids(objects) -> list[int]:
+    return [int(obj["id"]) for obj in objects or [] if isinstance(obj, dict) and "id" in obj]
+
+
 def _ordered_steps(steps: list[dict]) -> list[dict]:
     return [
         step for _, step in sorted(
@@ -104,16 +116,19 @@ def _variants_summary(result: CaseResult) -> str:
         return ""
     failed = [str(lbl) for lbl, oc in result.variants if oc in _FAILURE_OUTCOMES]
     total = len(result.variants)
+    title = "Автотесты" if result.case_id is not None else "Параметризация"
     if failed:
-        return f"Параметризация: {total} вариант(ов), упали: {', '.join(failed)}"
-    return f"Параметризация: {total} вариант(ов), все пройдены"
+        return f"{title}: {total} вариант(ов), упали: {', '.join(failed)}"
+    return f"{title}: {total} вариант(ов), все пройдены"
 
 
-def _compose_comment(result: CaseResult, limit: int = 5000) -> str:
+def _compose_comment(result: CaseResult, limit: int = 5000, steps_tree: list | None = None) -> str:
     parts: list[str] = []
     summary = _variants_summary(result)
     if summary:
         parts.append(summary)
+    if steps_tree:
+        parts.append("Шаги автотеста:\n" + step_capture.render(steps_tree)[:1500])
     if result.comment:
         prefix, suffix = "```text\n", "\n```"
         budget = max(limit - len(prefix) - len(suffix) - len("\n\n".join(parts)) - 2, 0)
@@ -148,6 +163,7 @@ class TestyClient:
         self._status_ids: dict[str, int] = {}
         self._test_by_case: dict[int, int] = {}
         self._case_by_external: dict[str, int | None] = {}
+        self._case_by_test: dict[int, int | None] = {}
         self._suite_cache: dict[tuple, int] = {}
         self._suite_attrs_cache: set[tuple[int, str]] = set()
         self._plan_cache: dict[tuple, int] = {}
@@ -411,6 +427,8 @@ class TestyClient:
         except requests.HTTPError as exc:
             log.warning("TestY: cannot read case %s to reconcile: %s", case_id, exc)
             return
+        if _tms_owned(case):
+            return
         suite = case.get("suite")
         current_suite_id = suite["id"] if isinstance(suite, dict) else suite
         name_changed = bool(name) and case.get("name") != name
@@ -650,11 +668,14 @@ class TestyClient:
     def report(self, result: CaseResult) -> bool:
         if not result.external_id:
             return False
-        case_id = self.resolve_case_by_external_id(result.external_id)
-        if case_id is None:
-            return False
+        if result.case_id is not None:
+            case_id = result.case_id
+        else:
+            case_id = self.resolve_case_by_external_id(result.external_id)
+            if case_id is None:
+                return False
 
-        test_ids = self._resolve_test_ids(result.external_id, case_id)
+        test_ids = self._resolve_test_ids(result, case_id)
         if not test_ids:
             log.warning(
                 "TestY: case %s is not part of plan %s — skipping result for %s",
@@ -683,7 +704,9 @@ class TestyClient:
             image_attachments = [item for item in uploaded if item["is_image"] and item["link"]]
 
         steps_results: list[dict] = []
-        if result.steps:
+        if result.case_id is not None:
+            steps_results = self._whole_case_step_results(case_id, status_id)
+        elif result.steps:
             case_steps = self._sync_case_steps(case_id, result.steps)
             passed_status_id = self._status_ids.get(self.cfg.status_name_for("passed").lower())
             failed_status_id = self._status_ids.get(self.cfg.status_name_for("failed").lower())
@@ -695,10 +718,18 @@ class TestyClient:
                     failed_status_id,
                 )
 
+        if result.case_id is not None:
+            # manual case: show the autotest's own steps only to point at where it broke
+            show_steps = result.outcome in _FAILURE_OUTCOMES
+        else:
+            show_steps = not steps_results  # steps not mapped onto the case, as text
         payload = {
             "status": status_id,
             "project": self.cfg.project_id,
-            "comment": _comment_with_images(_compose_comment(result), image_attachments),
+            "comment": _comment_with_images(
+                _compose_comment(result, steps_tree=result.steps if show_steps else None),
+                image_attachments,
+            ),
             "execution_time": result.execution_time,
             "attributes": attributes,
         }
@@ -721,11 +752,151 @@ class TestyClient:
                 ok = False
         return ok
 
-    def _resolve_test_ids(self, external_id: str, case_id: int) -> list[int]:
+    def _resolve_test_ids(self, result: CaseResult, case_id: int) -> list[int]:
         if self.cfg.test_map:
-            return self.cfg.test_map.get(external_id, [])
+            test_ids: list[int] = []
+            for ext in result.external_ids or [result.external_id]:
+                for test_id in self.cfg.test_map.get(ext, []):
+                    if test_id not in test_ids:
+                        test_ids.append(test_id)
+            if result.case_id is None:
+                return test_ids
+            # one nodeid may cover several cases: keep only the tests of this case
+            return [test_id for test_id in test_ids if self._case_of_test(test_id) == case_id]
         test_id = self._test_by_case.get(case_id)
         return [test_id] if test_id is not None else []
+
+    def _case_of_test(self, test_id: int) -> int | None:
+        if test_id not in self._case_by_test:
+            try:
+                case = self._get(f"tests/{test_id}/").get("case")
+            except requests.HTTPError as exc:
+                log.warning("TestY: cannot read test %s: %s", test_id, exc)
+                case = None
+            self._case_by_test[test_id] = int(case) if case is not None else None
+        return self._case_by_test[test_id]
+
+    def _whole_case_step_results(self, case_id: int, status_id: int) -> list[dict]:
+        """Every step of a manual case gets the overall status of the autotest.
+
+        Autotest and case steps do not map 1:1 (5 steps in the case, 10 in the code),
+        so they are never matched; where it broke is in the comment.
+        """
+        try:
+            case = self._get(f"cases/{case_id}/")
+        except requests.HTTPError as exc:
+            log.warning("TestY: cannot read case %s for steps: %s", case_id, exc)
+            return []
+        return [
+            {"step": int(step["id"]), "status": int(status_id)}
+            for step in _ordered_steps(case.get("steps") or [])
+            if step.get("id") is not None
+        ]
+
+    def link_cases(self, links: dict[int, list[str]]) -> None:
+        """Mirror @testy.case links into case attributes so TestY can find and run them."""
+        linked_by_ext: dict[str, set[int]] = {}
+        for case_id, external_ids in links.items():
+            for ext in external_ids:
+                linked_by_ext.setdefault(ext, set()).add(case_id)
+        for case_id, external_ids in sorted(links.items()):
+            self._link_case(case_id, sorted(external_ids), linked_by_ext)
+
+    def _link_case(
+        self, case_id: int, external_ids: list[str], linked_by_ext: dict[str, set[int]],
+    ) -> None:
+        key = self.cfg.automation_key
+        try:
+            case = self._get(f"cases/{case_id}/")
+        except requests.HTTPError as exc:
+            log.error("TestY: @testy.case(%s) on %s: cannot read case: %s",
+                      case_id, ", ".join(external_ids), exc)
+            return
+        project = case.get("project")
+        project = project.get("id") if isinstance(project, dict) else project
+        if project is not None and int(project) != self.cfg.project_id:
+            log.error("TestY: @testy.case(%s) on %s: case belongs to project %s, not %s",
+                      case_id, ", ".join(external_ids), project, self.cfg.project_id)
+            return
+        ext = external_ids[0]
+        if len(external_ids) > 1:
+            log.warning("TestY: case %s is linked from %s tests (%s); %s -> %r",
+                        case_id, len(external_ids), ", ".join(external_ids), key, ext)
+        self._warn_duplicate_links(case_id, ext, linked_by_ext.get(ext, {case_id}))
+
+        attrs = dict(case.get("attributes") or {})
+        changed = False
+        if attrs.get(key) != ext:
+            if attrs.get(key):
+                log.warning("TestY: case %s relinked: %s %r -> %r", case_id, key, attrs[key], ext)
+            attrs[key] = ext
+            changed = True
+        if MANUAL_KEY not in attrs:
+            attrs[MANUAL_KEY] = "true"
+            changed = True
+        if not changed:
+            return
+        resp = self.session.put(f"{self.cfg.api}/cases/{case_id}/",
+                                json=self._case_preserving_payload(case, attrs),
+                                timeout=self.cfg.timeout, verify=self.cfg.verify_ssl)
+        if resp.status_code >= 400:
+            log.error("TestY: failed to link case %s: %s %s",
+                      case_id, resp.status_code, resp.text[:300])
+            return
+        log.info("TestY: linked case %s <- %s", case_id, ext)
+
+    def _warn_duplicate_links(self, case_id: int, ext: str, linked: set[int]) -> None:
+        try:
+            data = self._get("cases/", project=self.cfg.project_id,
+                             case_attributes=json.dumps({self.cfg.automation_key: ext}))
+        except requests.HTTPError:
+            return
+        results = data["results"] if isinstance(data, dict) else data
+        # cases linked to the same test via @testy.case(a, b) share its automation_id
+        others = sorted(int(case["id"]) for case in results if int(case["id"]) not in linked)
+        if others:
+            log.warning("TestY: case(s) %s also have %s=%r — remove it there, "
+                        "%s is linked to case %s via @testy.case",
+                        others, self.cfg.automation_key, ext, ext, case_id)
+
+    def _case_preserving_payload(self, case: dict, attributes: dict) -> dict:
+        """PUT body that changes only ``attributes`` of a manual case.
+
+        TestY PUT is a full replace: labels/attachments left out are dropped, and steps
+        sent without ``id`` are re-created. Everything is echoed back as it was.
+        """
+        suite = case.get("suite")
+        payload = {
+            "name": case["name"],
+            "project": self.cfg.project_id,
+            "suite": suite["id"] if isinstance(suite, dict) else suite,
+            "setup": case.get("setup") or "",
+            "scenario": case.get("scenario") or "",
+            "expected": case.get("expected") or "",
+            "teardown": case.get("teardown") or "",
+            "description": case.get("description") or "",
+            "estimate": case.get("estimate"),
+            "is_steps": bool(case.get("is_steps")),
+            "attributes": attributes,
+            "attachments": _ids(case.get("attachments")),
+            "labels": [
+                {"id": label["id"], "name": label["name"], "color": label.get("color")}
+                for label in case.get("labels") or []
+            ],
+        }
+        if payload["is_steps"]:
+            payload["steps"] = [
+                {
+                    "id": step["id"],
+                    "name": step.get("name") or "",
+                    "scenario": step.get("scenario") or "",
+                    "expected": step.get("expected") or "",
+                    "sort_order": int(step.get("sort_order") or index + 1),
+                    "attachments": _ids(step.get("attachments")),
+                }
+                for index, step in enumerate(_ordered_steps(case.get("steps") or []))
+            ]
+        return payload
 
     def _clone_for_thread(self) -> "TestyClient":
         clone = object.__new__(TestyClient)
@@ -735,6 +906,7 @@ class TestyClient:
         clone._status_ids = self._status_ids
         clone._test_by_case = self._test_by_case
         clone._case_by_external = dict(self._case_by_external)
+        clone._case_by_test = self._case_by_test
         clone._suite_cache = self._suite_cache
         clone._suite_attrs_cache = self._suite_attrs_cache
         clone._plan_cache = self._plan_cache
@@ -742,7 +914,7 @@ class TestyClient:
 
     def report_all(self, results: list[CaseResult], max_workers: int = 8) -> int:
         for result in results:
-            if result.external_id:
+            if result.external_id and result.case_id is None:
                 self.resolve_case_by_external_id(result.external_id)
 
         _local: threading.local = threading.local()
@@ -772,6 +944,8 @@ class TestyClient:
         except requests.HTTPError as exc:
             log.warning("TestY: cannot read case %s for steps: %s", case_id, exc)
             return []
+        if _tms_owned(case):
+            return []  # manual case linked via @testy.case: its steps are not ours
         desired_steps = _flatten_steps(steps_tree)
         current_steps = case.get("steps") or []
         if current_steps and not self.cfg.override_cases:
