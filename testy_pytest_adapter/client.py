@@ -685,6 +685,10 @@ class TestyClient:
 
         status_name = self.cfg.status_name_for(result.outcome)
         status_id = self._status_ids.get(status_name.lower())
+        if status_id is None and result.outcome == "error":
+            # no "broken" status in the project: report the setup error as failed
+            status_name = self.cfg.status_name_for("failed")
+            status_id = self._status_ids.get(status_name.lower())
         if status_id is None:
             log.warning("TestY: status %r not found in project %s (available: %s)",
                         status_name, self.cfg.project_id, sorted(self._status_ids))

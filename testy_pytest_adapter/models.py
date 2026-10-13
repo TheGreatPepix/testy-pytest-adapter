@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 OUTCOME_TO_STATUS = {
     "passed": "Passed",
     "failed": "Failed",
-    "error": "Failed",
+    "error": "Broken",  # failed in setup / fixture
     "skipped": "Skipped",
     "xfailed": "Passed",
     "xpassed": "Failed",

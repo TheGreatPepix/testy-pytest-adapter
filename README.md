@@ -11,7 +11,7 @@ Pytest-плагин, который после прогона отправляе
 Этот адаптер решает эту проблему:
 
 - сопоставляет pytest-тест с тест-кейсом в TestY и отправляет результат
-  (`passed`, `failed`, `skipped`) с комментарием и трейсбеком;
+  (`passed`, `failed`, `skipped`, `broken`) с комментарием и трейсбеком;
 - записывает результаты в конкретный тест-план и сохраняет историю прогонов;
 - может создавать недостающие кейсы, наборы и планы из кода по разметке Allure;
 - может связать автотест с уже существующим ручным кейсом по id (`@testy.case`);
@@ -52,6 +52,7 @@ testy_root_name = Autotests
 testy_status_passed = Пройден
 testy_status_failed = Провален
 testy_status_skipped = Пропущен
+testy_status_broken = Сломан
 testy_status_untested = Untested
 ```
 
@@ -225,6 +226,7 @@ testy_insecure = true
 testy_status_passed = Пройден
 testy_status_failed = Провален
 testy_status_skipped = Пропущен
+testy_status_broken = Сломан
 testy_status_untested = Untested
 ```
 
@@ -277,11 +279,12 @@ POST /api/token/obtain/
 | Итог pytest                                  | Канонический статус |
 | -------------------------------------------- | ------------------- |
 | passed, xfailed                              | `Passed`            |
-| failed, ошибка в setup/фикстуре, xpassed     | `Failed`            |
+| failed, xpassed                              | `Failed`            |
+| ошибка в setup / фикстуре                    | `Broken`            |
 | skipped                                      | `Skipped`           |
 
-Отдельного статуса для ошибок в setup нет — они уходят как `Failed`, поэтому
-`testy_status_broken` / `TESTY_STATUS_BROKEN` сейчас ни на что не влияют.
+Если в проекте нет статуса для `Broken` (`testy_status_broken` / `TESTY_STATUS_BROKEN`),
+ошибка в setup отправляется как `Failed`, а не теряется.
 
 Затем эти статусы можно замапить на реальные имена проекта:
 
